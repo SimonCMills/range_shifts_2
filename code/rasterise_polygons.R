@@ -1,8 +1,6 @@
 ## rasterise range polygons
-# notes: ultimately generates a dataframe that only contains presences for 
-# land (i.e. drops ocean cells). Also 
-# need to create a buffer raster that contains cells within some large radius 
-# that can be treated as absences in modelling. 
+# generates a final dataframe with presence/absence for all land cells in 
+# neotropics
 
 # packages ----
 library(stars); library(sf); library(dplyr)
@@ -17,8 +15,6 @@ range_maps <- readRDS("birdlife_maps/range_maps_neotropical_endemics.rds") %>%
 grd <- clim[,,,1]
 grd[[1]] <- NA
 
-rast <- st_rasterize(sf = range_maps[1:5,], template = grd)
-
 rasts <- rep(NA, nrow(range_maps)) %>% as.list
 names(rasts) <- range_maps$SCINAME
 for(i in 1:nrow(range_maps)) {
@@ -31,9 +27,6 @@ saveRDS(rasts, "birdlife_maps/range_maps_neotropical_endemics_rast50k.rds")
 clim_df <- as.data.frame(clim) %>%
     reshape2::dcast(., x+y~band) %>%
     filter(complete.cases(.))
-
-as.data.frame(rasts[[1]]) %>%
-reshape2::dcast(., x+y~.) 
 
 r_df <- lapply(rasts, function(x) as.data.frame(x) %>%
            filter(complete.cases(.)))
@@ -54,3 +47,57 @@ ggplot(range_maps_df %>% filter(species == "Grallaria quitensis"), aes(x, y)) +
 
 saveRDS(range_maps_df, "birdlife_maps/neotropical_endemics_df_50km.rds")
 saveRDS(clim_df, "data/climate_df_50km.rds")
+
+# get buffered cells ----
+# updates range_maps_df sequentially
+ranges_buffered <- range_maps %>%
+    mutate(Shape = st_buffer(Shape, 5e5))
+
+rasts_buffered <- rep(NA, nrow(range_maps)) %>% as.list
+names(rasts_buffered) <- ranges_buffered$SCINAME
+for(i in 1:nrow(ranges_buffered)) {
+    rasts_buffered[[i]] <- st_rasterize(ranges_buffered[i,], grd, options=c("ALL_TOUCHED=T"))
+}
+
+r_buffered_df <- lapply(rasts_buffered, function(x) as.data.frame(x) %>%
+                   filter(complete.cases(.))) %>% 
+    bind_rows(., .id="species")
+
+range_maps_df <- left_join(range_maps_df, r_buffered_df) %>%
+    rename(within_500km = ID) %>%
+    mutate(within_500km = ifelse(is.na(within_500km), 0, 1))
+
+range_maps_df %>% 
+    filter(species == "Abeillia abeillei") %>%
+    ggplot(aes(x, y, fill=factor(presence + within_500km))) +
+    geom_tile() +
+    coord_equal() +
+    scale_fill_viridis_d()
+
+## repeat but for 1000km 
+ranges_buffered <- range_maps %>%
+    mutate(Shape = st_buffer(Shape, 1e6))
+
+rasts_buffered <- rep(NA, nrow(range_maps)) %>% as.list
+names(rasts_buffered) <- ranges_buffered$SCINAME
+for(i in 1:nrow(ranges_buffered)) {
+    rasts_buffered[[i]] <- st_rasterize(ranges_buffered[i,], grd, options=c("ALL_TOUCHED=T"))
+}
+
+r_buffered_df <- lapply(rasts_buffered, function(x) as.data.frame(x) %>%
+                            filter(complete.cases(.))) %>% 
+    bind_rows(., .id="species")
+
+range_maps_df <- left_join(range_maps_df, r_buffered_df) %>%
+    rename(within_1000km = ID) %>%
+    mutate(within_1000km = ifelse(is.na(within_1000km), 0, 1))
+
+range_maps_df %>% 
+    filter(species == "Abeillia abeillei") %>%
+    ggplot(aes(x, y, fill=factor(presence + within_500km + within_1000km))) +
+    geom_tile() +
+    coord_equal() +
+    scale_fill_viridis_d()
+
+#
+saveRDS(range_maps_df, "birdlife_maps/neotropical_endemics_df_50km_with_buffers.rds")
